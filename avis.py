@@ -15,37 +15,54 @@ import sounddevice as sd
 import time
 
 # application configuration
-led_width  = 32
-led_height = 16
-framerate  = 60
-display_scale = 32
+led_width         = 32
+led_height        = 16
+framerate         = 60
+display_scale     = 20
+samples_per_frame = 512
 
 # audio frame history
 hist_len = 128
-min_buf = [0] * hist_len
-max_buf = [0] * hist_len
+min_buf  = [0] * hist_len
+max_buf  = [0] * hist_len
 hist_idx = 0
 
 # dropoff states
 dropoffs = [0] * led_width
 
 # matrix state
-led_matrix = [(0, 0, 0)] * led_width * led_height
+current_levels = [0] * led_width
 
 # display state
 display = 0
 
-# set a single pixel
-def set_pixel(x, y, col):
-    led_matrix[y * led_width + x] = col
+# draw a single bar or point
+def render_column(x):
+    # update dropoff for this bucket
+    dropoffs[x] = max(dropoffs[x] - 0.25, current_levels[x] + 0.5)
+
+    if dropoffs[x] < 0:
+        dropoffs[x] = 0
+    if dropoffs[x] >= led_height:
+        dropoffs[x] = led_height - 1
+
+    # helper to invert y values vertically
+    def normalize_y(y):
+        return led_height - (y + 1)
+
+    # don't render empty levels cause they're ugly
+    if current_levels[x] > 0:
+        pygame.draw.rect(display, (255, 255, 255), [x * display_scale, normalize_y(current_levels[x]) * display_scale, display_scale, current_levels[x] * display_scale])
+
+    # blit the dropoff point
+    pygame.draw.rect(display, (130, 30, 255), [x * display_scale, normalize_y(dropoffs[x]) * display_scale, display_scale, display_scale / 2])
 
 # process a completed frame
 def output_matrix():
-    for y in range(0, led_height):
-        base_idx = y * led_width
+    display.fill((0, 0, 0))
 
-        for x in range(0, led_width):
-            pygame.draw.rect(display, led_matrix[base_idx + x], [x * display_scale, y * display_scale, display_scale, display_scale])
+    for x in range(0, led_width):
+        render_column(x)
 
     pygame.display.flip()
 
@@ -57,11 +74,6 @@ def output_matrix():
                 return False
 
     return True
-
-# flush the matrix to black
-def clear_matrix():
-    for i in range(0, len(led_matrix)):
-        led_matrix[i] = (0, 0, 0)
 
 # compute non-normalized fft coefficient amplitudes, crunched into led_width buckets
 def compute_amplitudes(frame):
@@ -126,32 +138,7 @@ def normalize_amplitudes(amp):
 def update_matrix_from_amplitudes(amps):
     # these should all be between 0 and 1
     for x in range(0, led_width):
-        dropoffs[x] = min(dropoffs[x] + 0.25, (1.0 - amps[x]) * led_height)
-
-        if dropoffs[x] >= led_height:
-            dropoffs[x] = led_height - 1
-
-        if dropoffs[x] < 0:
-            dropoffs[x] = 0
-
-        for y in range(0, int(amps[x] * led_height)):
-            set_pixel(x, led_height - (y + 1), (255, 255, 255))
-
-        # also render dropoff point
-        set_pixel(x, int(dropoffs[x]), (0, 120, 255))
-
-# synchronous, render some random data for a couple frames
-def cycle_random():
-    global led_matrix
-    time_sec = 2
-
-    for i in range(0, framerate * time_sec):
-        # fill matrix with random stuffs
-        for x in range(0, led_width * led_height):
-            led_matrix[x] = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-
-        if not output_matrix():
-            break
+        current_levels[x] = int(amps[x] * led_height)
 
 # start visualizing audio
 def start_vis():
@@ -169,7 +156,7 @@ def start_vis():
     print('devices:')
     print(sd.query_devices())
 
-    with sd.InputStream(samplerate=44100, channels=1, blocksize=256,  callback=callback):
+    with sd.InputStream(samplerate=44100, channels=1, blocksize=samples_per_frame,  callback=callback):
         while output_matrix():
             # grab the most recent audio frame
             cur_frame = None
@@ -180,9 +167,6 @@ def start_vis():
             except queue.Empty:
                 if cur_frame is None:
                     cur_frame = q.get()
-
-            # wipe the matrix
-            clear_matrix()
 
             # compute the fft amplitudes
             amps = compute_amplitudes(cur_frame)
