@@ -11,8 +11,12 @@ import numpy
 import pygame
 import queue
 import random
+import serial
 import sounddevice as sd
 import time
+
+# serial interface
+local_device = serial.Serial('/dev/ttyACM1', 115200, timeout=5)
 
 # application configuration
 led_width         = 32
@@ -74,6 +78,12 @@ def output_matrix():
                 return False
 
     return True
+
+# upload matrix over serial port
+def upload_matrix():
+    for i in range(0, int(led_width)):
+        local_device.write(current_levels[i].to_bytes(1, byteorder='big'))
+    #local_device.write(b'\xFF')
 
 # compute non-normalized fft coefficient amplitudes, crunched into led_width buckets
 def compute_amplitudes(frame):
@@ -172,6 +182,11 @@ def start_vis():
             amps = compute_amplitudes(cur_frame)
             normalize_amplitudes(amps)
             update_matrix_from_amplitudes(amps)
+
+            # send matrix data to device
+            upload_matrix()
+
+            time.sleep(1/framerate)
 
 # entry point
 def start():
